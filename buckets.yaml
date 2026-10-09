@@ -1,0 +1,7 @@
+buckets:
+    - bucket_uri: gs://em52-us-depmap-src-restr-prod-6f04/data/DMC_26Q1
+      mount_path: $HOME/Projects/UGCG_BETA/data/DMC_26Q1
+      
+    - bucket_uri: gs://em52-us-depmap-src-restr-prod-6f04/USDataScience/Public_Datasets/UCSC/TCGA_TARGET_GTEx/UCSC_TOIL_RNAseq_recompute
+      mount_path: $HOME/Projects/UGCG_BETA/data/TCGA_TARGET_GTEx
+      

@@ -1,0 +1,249 @@
+---
+title: "Various analyses for UGCG BETA"
+
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      knit_root_dir = here::here(),
+      output_dir = 'out',
+      output_file = paste0(xfun::sans_ext(basename(input)), '_', format(Sys.Date(),format="%d%b%Y"), '.html'),
+      envir = globalenv()
+    )
+  })
+
+output: 
+  html_document: 
+    code_download: yes
+    date: "`r format(Sys.time(), '%d-%B-%Y, %H:%M:%S %Z')`"
+    toc: yes
+    toc_float: yes
+    fig_width: 10
+    fig_height: 10
+    fig_caption: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+
+# set up output html figures to be in SVG format
+# set up current working directory to be the project directory
+knitr::opts_chunk$set(echo = TRUE,dev='svg',root.dir = rprojroot::find_rstudio_root_file())
+date.stamp <- format(Sys.Date(),format="%d%b%Y")
+print(rprojroot::find_rstudio_root_file())
+knitr::opts_knit$set(root.dir=rprojroot::find_rstudio_root_file())
+
+# THIS NEEDS TO BE EDITED
+this.analysis <- "UGCG_BETA_analyses"
+
+# output files will be prefixed with this.analysis and placed in the "out" folder
+filestamp <- function(x) {
+  paste0('out/',this.analysis,"_",xfun::sans_ext(x),"_", format(Sys.Date(),format="%d%b%Y"), ".",xfun::file_ext(x))
+}
+
+# Functions to get date and time
+getDate <- function() format(Sys.Date(), "%Y%m%d")
+getTime <- function() format(Sys.time(), "%H:%M:%S")
+
+# copy snapshot of this Rmd to output folder
+this.rmd <- knitr::current_input()
+if(!is.null(this.rmd)) {
+system(paste0("cp src/",
+              this.rmd,
+              " ",
+              paste0("out/",xfun::sans_ext(this.rmd),'_',format(Sys.Date(),format="%d%b%Y"),".",xfun::file_ext(this.rmd))
+)
+)
+}
+
+# Define project I/O directory structure
+projDir <- "~/Projects/UGCG_BETA" # needs to be edited
+dataDir <- file.path(projDir, "data")
+outDir <- file.path(projDir, "out", this.analysis, getDate())
+
+depmapDir <- file.path(dataDir, "DMC_26Q1")
+toilDir <- file.path(dataDir, "TCGA_TARGET_GTEx")
+
+if(!dir.exists(outDir)) dir.create(outDir, recursive = TRUE)
+
+options(tidyverse.quiet = TRUE)
+Sys.setenv("VROOM_CONNECTION_SIZE" = 1000000)
+
+```
+
+## Load libraries
+
+```{r}
+
+library(tidyverse)
+library(magrittr)
+library(RColorBrewer)
+library(ggsci)
+library(viridis)
+library(conflicted)
+
+conflict_prefer_all("dplyr", quiet = TRUE)
+
+```
+
+## Load data
+
+```{r}
+
+# Mount GCP buckets
+if(length(list.files(depmapDir)) == 0) system("axe-cloud-fuser mount --path buckets.yaml")
+
+## DepMap DMC 26Q1 ##
+
+# Metadata
+depmap_mtdt <- read_csv(file.path(depmapDir, "Model.csv"))
+
+# Expression
+depmap_exp_file <- file.path(depmapDir, "OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv")
+depmap_exp_outfile <- file.path(dataDir, "UGCG_DMC_26Q1_log2TPM.txt")
+
+if(!file.exists(depmap_exp_outfile))
+{
+  depmap_exp <- read_csv(depmap_exp_file, n_max = 10)
+  
+  # Define genes of interest
+  GOI <- c("UGCG")
+  
+  # Extract columns of interest
+  COI <- c(grep("ModelID", colnames(depmap_exp)),
+           grep("IsDefaultEntryForModel", colnames(depmap_exp)),
+           grep(paste(unique(GOI), collapse = "|"), colnames(depmap_exp)))
+  
+  # Expression filtered for genes of interest
+  depmap_exp <- read_csv(pipe(paste0("cut -d',' -f", paste(COI, collapse = ","), " ", depmap_exp_file))) %>%
+                filter(IsDefaultEntryForModel == "Yes") %>%
+                select(-IsDefaultEntryForModel) %>%
+                pivot_longer(cols = !ModelID, names_to = "GeneSymbol", values_to = "log2TPM") %>%
+                mutate(GeneSymbol = str_extract(GeneSymbol, "[^ ]+")) %>%
+                filter(GeneSymbol %in% GOI) %>%
+                left_join(select(depmap_mtdt, ModelID, grep("Oncotree", names(depmap_mtdt))), by = "ModelID")
+  
+  write_tsv(depmap_exp, depmap_exp_outfile)
+} else {
+  depmap_exp <- read_tsv(depmap_exp_outfile) %>% as.data.frame()
+}
+
+## TCGA-TARGET-GTEx TOIL RNA-seq recompute from UCSC ##
+
+toil_exp_file <- file.path(toilDir, "TcgaTargetGtex_rsem_gene_tpm.txt")
+toil_exp_outfile <- file.path(dataDir, "UGCG_TCGA_TARGET_GTEx_log2TPM.txt")
+
+# Metadata
+toil_mtdt <- read_tsv(file.path(toilDir, "TcgaTargetGTEX_phenotype.txt")) %>% as.data.frame()
+toil_annot <- read_tsv(file.path(toilDir, "TcgaTargetGtex_probeMap_gencode.v23.annotation.gene.probemap.txt")) %>% as.data.frame()
+
+colnames(toil_mtdt) <- gsub("^_", "", colnames(toil_mtdt))
+
+ugcg_id <- toil_annot$id[which(toil_annot$gene == "UGCG")]
+
+if(!file.exists(toil_exp_outfile))
+{
+  toil_exp <- read_tsv(pipe(paste0("gawk 'BEGIN {FS=\"\\t\"} {if(NR == 1 || $1 == \"", ugcg_id, "\") {print $0}}' ", toil_exp_file))) %>%
+              mutate(GeneSymbol = "UGCG") %>%
+              select(GeneSymbol, names(.)) %>%
+              select(-sample) %>%
+              pivot_longer(cols = !GeneSymbol, names_to = "sample", values_to = "log2TPM") %>%
+              left_join(toil_mtdt, by = "sample") %>%
+              rename(SampleID = sample) %>%
+              filter(!sample_type %in% c("Control Analyte", "Cell Line") & !grepl("treatment", sample_type)) %>%
+              mutate(TPM = (2^log2TPM)-0.001,
+                     log2TPM = log2(TPM + 1)) +
+              mutate(sample_type = case_when(sample_type == "Solid Tissue Normal" ~ "Normal Tissue",
+                                             grepl("Primary", sample_type) ~ "Primary Tumor",
+                                             grepl("Metastatic", sample_type) ~ "Metastatic Tumor",
+                                             grepl("Recurrent", sample_type) ~ "Recurrent Tumor",
+                                             .default = sample_type),
+                     sample_type = factor(sample_type, levels = c("Primary Tumor", "Recurrent Tumor", "Metastatic Tumor", "Normal Tissue")),
+                     detailed_category = case_when(detailed_category == "Acute Myeloid Leukemia, Induction Failure Subproject" ~ "Acute Myeloid Leukemia",
+                                                   .default = detailed_category),
+                     primary_site = case_when(primary_site == "Adrenal gland" ~ "Adrenal Gland",
+                                              primary_site == "Cervix Uteri" ~ "Cervix",
+                                              primary_site == "Soft tissue,Bone" ~ "Soft Tissue: Bone",
+                                              primary_site == "Sympathetic\xcaNervous System" ~ "Sympathetic Nervous System",
+                                              primary_site == "Thyroid Gland" ~ "Thyroid",
+                                              is.na(primary_site) & detailed_category == "Skin - Sun Exposed (Lower Leg)" ~ "Skin",
+                                              is.na(primary_site) & detailed_category == "Esophagus - Mucosa" ~ "Esophagus",
+                                              is.na(primary_site) & detailed_category == "Stomach" ~ "Stomach",
+                                              .default = primary_site)) %>%
+              as.data.frame()
+
+} else {
+  toil_exp <- read_tsv(toil_exp_outfile) %>% as.data.frame()
+}
+
+```
+
+## Plot GTEx expression
+
+```{r}
+
+gtex <- toil_exp %>%
+        filter(study == "GTEX")
+
+gtex_med <- gtex %>%
+            group_by(primary_site) %>%
+            summarise(median_log2TPM = median(log2TPM, na.rm = TRUE)) %>%
+            ungroup() %>%
+            arrange(median_log2TPM)
+
+gtex %<>% mutate(primary_site = factor(primary_site, levels = gtex_med$primary_site))
+
+gtex_bp <- gtex %>%
+            ggplot(aes(primary_site, log2TPM)) +
+            geom_jitter(aes(color = primary_site),
+                       size = 0.25,
+                       width = 0.2,
+                       alpha = 0.6) +
+            geom_boxplot(fill = "white",
+                         alpha = 0.3,
+                         width = 0.5,
+                         outliers = FALSE) +
+            scale_color_viridis(discrete = TRUE, direction = -1, option = "plasma") +
+            coord_flip() +
+            labs(y = "Log2(TPM + 1)") +
+            theme_minimal() +
+            theme(legend.position = "none",
+                  axis.title.x = element_text(size = 8),
+                  axis.text.x = element_text(size = 8),
+                  axis.title.y = element_blank(),
+                  axis.text.y = element_text(size = 7),
+                  plot.margin = margin(5, 5, 5, 5, "mm"))
+
+png(file.path(outDir, "UGCG_GTEx_log2TPM_boxplots.png"), height = 4, width = 3.5, units = "in", res = 300)
+print(gtex_bp)
+dev.off()
+
+```
+
+
+# Plot primary site vs. sample type
+
+```{r}
+
+pd <- position_dodge2(width = 0.8, preserve = "single")
+n_sites <- length(unique(toil_exp$primary_site))
+
+ps_vs_st <- toil_exp %>%
+            ggplot(aes(primary_site, log2TPM)) +
+            geom_point(aes(color = primary_site),
+                       size = 0.5,
+                       alpha = 0.3) +
+            geom_boxplot(fill = "white",
+                         alpha = 0.3,
+                         width = 0.5,
+                         outliers = FALSE) +
+            coord_flip() +
+            facet_wrap(~study) +
+            theme_bw() +
+            theme(legend.position = "none")
+
+```
+
+
+```{r}
+knitr::knit_exit()
+```

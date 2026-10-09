@@ -1,0 +1,89 @@
+---
+title: "100 template"
+
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      knit_root_dir = here::here(),
+      output_dir = 'out',
+      output_file = paste0(xfun::sans_ext(basename(input)), '_', format(Sys.Date(),format="%d%b%Y"), '.html'),
+      envir = globalenv()
+    )
+  })
+
+output: 
+  html_document: 
+    code_download: yes
+    date: "`r format(Sys.time(), '%d-%B-%Y, %H:%M:%S %Z')`"
+    toc: yes
+    toc_float: yes
+    fig_width: 10
+    fig_height: 10
+    fig_caption: yes
+    number_sections: yes
+---
+  
+```{r setup, include=FALSE}
+
+# set up output html figures to be in SVG format
+# set up current working directory to be the project directory
+knitr::opts_chunk$set(echo = TRUE,dev='svg',root.dir = rprojroot::find_rstudio_root_file())
+date.stamp <- format(Sys.Date(),format="%d%b%Y")
+print(rprojroot::find_rstudio_root_file())
+knitr::opts_knit$set(root.dir=rprojroot::find_rstudio_root_file())
+
+# THIS NEEDS TO BE EDITED
+this.analysis <- ""
+
+# output files will be prefixed with this.analysis and placed in the "out" folder
+filestamp <- function(x) {
+  paste0('out/',this.analysis,"_",xfun::sans_ext(x),"_", format(Sys.Date(),format="%d%b%Y"), ".",xfun::file_ext(x))
+}
+
+# Functions to get date and time
+getDate <- function() format(Sys.Date(), "%Y%m%d")
+getTime <- function() format(Sys.time(), "%H:%M:%S")
+
+# copy snapshot of this Rmd to output folder
+this.rmd <- knitr::current_input()
+if(!is.null(this.rmd)) {
+system(paste0("cp src/",
+              this.rmd,
+              " ",
+              paste0("out/",xfun::sans_ext(this.rmd),'_',format(Sys.Date(),format="%d%b%Y"),".",xfun::file_ext(this.rmd))
+)
+)
+}
+
+outDir <- file.path("out", this.analysis)
+
+if(!dir.exists(outDir)) dir.create(outDir, recursive = TRUE)
+
+options(tidyverse.quiet = TRUE)
+Sys.setenv("VROOM_CONNECTION_SIZE" = 1000000)
+
+```
+
+## Load libraries
+
+```{r}
+
+library(tidyverse)
+library(magrittr)
+library(RColorBrewer)
+library(ggsci)
+library(conflicted)
+
+conflict_prefer_all("dplyr", quiet = TRUE)
+
+```
+
+## Title
+
+```{r}
+
+write.csv(cars,filestamp("out.csv"))
+```
+```{r}
+knitr::knit_exit()
+```
